@@ -14,6 +14,16 @@ import {
   BookOpen
 } from 'lucide-react';
 
+const isEmailSent = (lead) => {
+  const status = String(lead['Sent Status'] || '').toLowerCase();
+  return status.includes('sent') && !status.includes('not');
+};
+
+const isFollowUpSent = (lead) => {
+  const status = String(lead['Follow Up Sent Status'] || '').toLowerCase();
+  return status.includes('sent') && !status.includes('not');
+};
+
 export default function LeadDetailsModal({ 
   lead, 
   onClose, 
@@ -304,11 +314,11 @@ export default function LeadDetailsModal({
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Outreach Email Workspace</h3>
                   <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
-                    lead['Sent Status'].toLowerCase() === 'sent' 
+                    isEmailSent(lead) 
                       ? 'bg-emerald-500/10 text-emerald-400' 
                       : 'bg-slate-800 text-slate-400'
                   }`}>
-                    {lead['Sent Status'].toLowerCase() === 'sent' ? `Sent at ${lead['Sent At'] ? new Date(lead['Sent At']).toLocaleDateString() : ''}` : 'Draft'}
+                    {isEmailSent(lead) ? `Sent at ${lead['Sent At'] ? new Date(lead['Sent At']).toLocaleDateString() : ''}` : 'Draft'}
                   </span>
                 </div>
 
@@ -340,7 +350,7 @@ export default function LeadDetailsModal({
                       type="checkbox" 
                       checked={approvedToSend} 
                       onChange={(e) => setApprovedToSend(e.target.checked)}
-                      disabled={lead['Sent Status'].toLowerCase() === 'sent'}
+                      disabled={isEmailSent(lead)}
                       className="rounded bg-slate-900 border-slate-800 text-prasha-gold focus:ring-0 cursor-pointer disabled:opacity-40"
                     />
                     <span className="text-xs font-semibold text-slate-300">Approve to Send First Email</span>
@@ -357,7 +367,7 @@ export default function LeadDetailsModal({
                     </button>
                     <button
                       onClick={() => onSendSingle(lead.rowNumber)}
-                      disabled={isProcessing || !approvedToSend || lead['Sent Status'].toLowerCase() === 'sent' || !primaryEmail}
+                      disabled={isProcessing || !approvedToSend || isEmailSent(lead) || !primaryEmail}
                       className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-all disabled:opacity-40"
                     >
                       <Send size={12} />
@@ -374,16 +384,16 @@ export default function LeadDetailsModal({
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Follow-up Email Workspace</h3>
                   <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
-                    lead['Follow Up Sent Status'].toLowerCase() === 'sent' 
+                    isFollowUpSent(lead) 
                       ? 'bg-emerald-500/10 text-emerald-400' 
                       : 'bg-slate-800 text-slate-400'
                   }`}>
-                    {lead['Follow Up Sent Status'].toLowerCase() === 'sent' ? `Sent at ${lead['Follow Up Sent At'] ? new Date(lead['Follow Up Sent At']).toLocaleDateString() : ''}` : 'Draft'}
+                    {isFollowUpSent(lead) ? `Sent at ${lead['Follow Up Sent At'] ? new Date(lead['Follow Up Sent At']).toLocaleDateString() : ''}` : 'Draft'}
                   </span>
                 </div>
 
                 {/* Warning: first email must be sent */}
-                {lead['Sent Status'].toLowerCase() !== 'sent' && (
+                {!isEmailSent(lead) && (
                   <div className="border border-rose-500/25 bg-rose-500/5 p-3 rounded-lg flex items-center gap-2 text-xs text-rose-400">
                     <AlertTriangle size={16} />
                     <span>Warning: The first email has not been sent yet. Follow-up drafts should normally only be sent after the first email.</span>
@@ -418,7 +428,7 @@ export default function LeadDetailsModal({
                       type="checkbox" 
                       checked={approvedFollowUp} 
                       onChange={(e) => setApprovedFollowUp(e.target.checked)}
-                      disabled={lead['Follow Up Sent Status'].toLowerCase() === 'sent' || lead['Sent Status'].toLowerCase() !== 'sent'}
+                      disabled={isFollowUpSent(lead) || !isEmailSent(lead)}
                       className="rounded bg-slate-900 border-slate-800 text-prasha-gold focus:ring-0 cursor-pointer disabled:opacity-40"
                     />
                     <span className="text-xs font-semibold text-slate-300">Approve to Send Follow-up</span>
@@ -427,7 +437,7 @@ export default function LeadDetailsModal({
                   <div className="flex gap-2 w-full sm:w-auto">
                     <button
                       onClick={() => onDraftSingle(lead.rowNumber, 'followup')}
-                      disabled={isProcessing || lead['Sent Status'].toLowerCase() !== 'sent'}
+                      disabled={isProcessing || !isEmailSent(lead)}
                       className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-2 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg text-xs font-semibold transition-all disabled:opacity-45"
                     >
                       <Sparkles size={12} />
@@ -435,7 +445,7 @@ export default function LeadDetailsModal({
                     </button>
                     <button
                       onClick={() => onSendSingle(lead.rowNumber)}
-                      disabled={isProcessing || !approvedFollowUp || lead['Follow Up Sent Status'].toLowerCase() === 'sent' || !primaryEmail}
+                      disabled={isProcessing || !approvedFollowUp || isFollowUpSent(lead) || !primaryEmail}
                       className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-all disabled:opacity-40"
                     >
                       <Send size={12} />

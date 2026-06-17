@@ -76,8 +76,12 @@ export default function ChartsSection({ leads }) {
   // 4. Data Prep: Outreach Funnel
   const total = leads.length;
   const enriched = leads.filter(l => l['Last Checked']).length;
-  const drafted = leads.filter(l => l['Email Subject'] || l['Sent Status'].toLowerCase() === 'sent').length;
-  const sent = leads.filter(l => l['Sent Status'].toLowerCase() === 'sent').length;
+  const isSent = (lead) => {
+    const status = String(lead['Sent Status'] || '').toLowerCase();
+    return status.includes('sent') && !status.includes('not');
+  };
+  const drafted = leads.filter(l => l['Email Subject'] || isSent(l)).length;
+  const sent = leads.filter(l => isSent(l)).length;
 
   const funnelData = [
     { stage: 'Imported', count: total, percentage: 100, color: '#3b82f6' },

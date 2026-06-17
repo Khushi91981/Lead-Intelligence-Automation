@@ -24,10 +24,21 @@ export default function DashboardMetrics({ leads, lastSyncMeta, unprocessedCount
   const lowQuality = leads.filter(l => l['Lead Quality'] === 'Low').length;
   const needsReview = leads.filter(l => l['Lead Quality'] === 'Needs Review').length;
 
-  const firstDrafts = leads.filter(l => l['Email Subject'] && l['Email Draft'] && l['Sent Status'].toLowerCase() !== 'sent').length;
-  const firstSent = leads.filter(l => l['Sent Status'].toLowerCase() === 'sent').length;
-  const followUpDrafts = leads.filter(l => l['Follow Up Subject'] && l['Follow Up Draft'] && l['Follow Up Sent Status'].toLowerCase() !== 'sent').length;
-  const followUpSent = leads.filter(l => l['Follow Up Sent Status'].toLowerCase() === 'sent').length;
+  // Helper functions for status checking
+  const isEmailSent = (lead) => {
+    const status = String(lead['Sent Status'] || '').toLowerCase();
+    return status.includes('sent') && !status.includes('not');
+  };
+
+  const isFollowUpSent = (lead) => {
+    const status = String(lead['Follow Up Sent Status'] || '').toLowerCase();
+    return status.includes('sent') && !status.includes('not');
+  };
+
+  const firstDrafts = leads.filter(l => l['Email Subject'] && l['Email Draft'] && !isEmailSent(l)).length;
+  const firstSent = leads.filter(l => isEmailSent(l)).length;
+  const followUpDrafts = leads.filter(l => l['Follow Up Subject'] && l['Follow Up Draft'] && !isFollowUpSent(l)).length;
+  const followUpSent = leads.filter(l => isFollowUpSent(l)).length;
 
   const emailDiscoveryRate = processedLeads > 0 ? Math.round((emailsFound / processedLeads) * 100) : 0;
 

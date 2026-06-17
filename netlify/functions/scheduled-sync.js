@@ -14,7 +14,11 @@ import {
   buildFollowUpEmailDraft,
   buildEmailHtml,
   buildSignatureHtml,
-  getStorageStore
+  getStorageStore,
+  getHeaderMap,
+  getSheetDetails,
+  isEmailSent,
+  isFollowUpSent
 } from './utils.js';
 import dotenv from 'dotenv';
 
@@ -87,26 +91,31 @@ const syncHandler = async (event, context) => {
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-    // Fetch sheet list
-    const metadata = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheetsList = metadata.data.sheets || [];
-    let targetSheet = sheetsList.find(s => s.properties.title === CONFIG.sheetName);
-    if (!targetSheet && sheetsList.length > 0) {
-      targetSheet = sheetsList[0];
+    // Fetch sheet details with caching
+    let sheetDetails;
+    try {
+      sheetDetails = await getSheetDetails(sheets, spreadsheetId, store);
+    } catch (err) {
+      console.error('Scheduled Sync: Failed to resolve sheet details:', err.message);
+      return { statusCode: 500, body: err.message };
     }
-
-    if (!targetSheet) {
-      console.warn('Scheduled Sync: No sheet found. Exiting.');
-      return { statusCode: 200 };
-    }
-
-    const sheetName = targetSheet.properties.title;
+    const { sheetName } = sheetDetails;
 
     // Fetch all values
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${sheetName}!A:Z`
-    });
+    let response;
+    try {
+      response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${sheetName}!A:Z`
+      });
+    } catch (err) {
+      console.warn(`Scheduled Sync: Failed to get values, retrying with fresh metadata: ${err.message}`);
+      const fresh = await getSheetDetails(sheets, spreadsheetId, store, true);
+      response = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${fresh.sheetName}!A:Z`
+      });
+    }
 
     const rows = response.data.values || [];
     if (rows.length === 0) {
@@ -115,14 +124,12 @@ const syncHandler = async (event, context) => {
     }
 
     const rawHeaders = rows[0];
-    const headersMap = {};
-    rawHeaders.forEach((header, index) => {
-      if (header) headersMap[String(header).trim()] = index + 1;
-    });
+    const headersMap = getHeaderMap(rawHeaders);
 
     const leads = rows.slice(1).map((row, i) => {
       const lead = mapRowToObj(row, headersMap);
       lead.rowNumber = i + 2;
+      lead.rawRowValues = row;
       return lead;
     });
 
@@ -140,8 +147,8 @@ const syncHandler = async (event, context) => {
       const website = lead['Website URL'];
       const lastChecked = lead['Last Checked'];
 
-      // Process only if website is present and we haven't checked it yet
-      if (website && !lastChecked) {
+      // Process only if website is present, we haven't checked it, and no email has been sent/processed
+      if (website && !lastChecked && !isEmailSent(lead) && !isFollowUpSent(lead)) {
         enrichmentCount++;
         console.log(`Scheduled Sync: Enriching lead row ${lead.rowNumber} (${website})`);
 
@@ -166,8 +173,8 @@ const syncHandler = async (event, context) => {
           lead['Personalization Point'] = personalization;
           lead['Last Checked'] = new Date().toISOString();
 
-          // Auto draft email if score is good enough
-          if (score.score >= CONFIG.minScoreToRecommend && lead['Primary Email']) {
+          // Auto draft email if score is good enough (and not sent yet)
+          if (score.score >= CONFIG.minScoreToRecommend && lead['Primary Email'] && !isEmailSent(lead)) {
             const draft = buildEmailDraft(lead);
             lead['Email Subject'] = draft.subject;
             lead['Email Draft'] = draft.body;
@@ -181,7 +188,7 @@ const syncHandler = async (event, context) => {
         }
 
         const maxCols = Math.max(rawHeaders.length, HEADERS.length);
-        const updatedRow = mapObjToRow(lead, headersMap, maxCols);
+        const updatedRow = mapObjToRow(lead, headersMap, maxCols, lead.rawRowValues);
 
         updates.push({
           range: `${sheetName}!A${lead.rowNumber}:${getColumnLetter(maxCols)}${lead.rowNumber}`,
@@ -201,9 +208,9 @@ const syncHandler = async (event, context) => {
 
       const toEmail = lead['Primary Email'];
       const approvedFirst = lead['Approved To Send'] === true;
-      const sentFirst = lead['Sent Status'].toLowerCase() === 'sent';
+      const sentFirst = isEmailSent(lead);
       const approvedFollowUp = lead['Approved To Send Follow Up'] === true;
-      const sentFollowUp = lead['Follow Up Sent Status'].toLowerCase() === 'sent';
+      const sentFollowUp = isFollowUpSent(lead);
 
       let mailType = '';
       let subject = '';
@@ -240,11 +247,12 @@ const syncHandler = async (event, context) => {
             requestBody: { raw: rawMessage }
           });
 
+          // Set status to dropdown value 'Email Sent'
           if (mailType === 'first') {
-            lead['Sent Status'] = 'Sent';
+            lead['Sent Status'] = 'Email Sent';
             lead['Sent At'] = new Date().toISOString();
           } else {
-            lead['Follow Up Sent Status'] = 'Sent';
+            lead['Follow Up Sent Status'] = 'Email Sent';
             lead['Follow Up Sent At'] = new Date().toISOString();
           }
         } catch (err) {
@@ -253,7 +261,7 @@ const syncHandler = async (event, context) => {
         }
 
         const maxCols = Math.max(rawHeaders.length, HEADERS.length);
-        const updatedRow = mapObjToRow(lead, headersMap, maxCols);
+        const updatedRow = mapObjToRow(lead, headersMap, maxCols, lead.rawRowValues);
 
         updates.push({
           range: `${sheetName}!A${lead.rowNumber}:${getColumnLetter(maxCols)}${lead.rowNumber}`,

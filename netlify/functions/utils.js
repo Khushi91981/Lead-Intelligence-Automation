@@ -155,6 +155,46 @@ export async function getGoogleAuthClient() {
   return oauth2Client;
 }
 
+export async function getSheetDetails(sheets, spreadsheetId, store, forceRefresh = false) {
+  if (!forceRefresh) {
+    try {
+      const cached = await store.getJSON(`sheet-details-${spreadsheetId}`);
+      if (cached && cached.sheetName && cached.sheetId !== undefined) {
+        return cached;
+      }
+    } catch (err) {
+      console.warn('Error reading sheet details cache:', err.message);
+    }
+  }
+
+  console.log(`Fetching spreadsheet metadata for ID: ${spreadsheetId}...`);
+  const metadata = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheetsList = metadata.data.sheets || [];
+  
+  let targetSheet = sheetsList.find(s => s.properties.title === CONFIG.sheetName);
+  if (!targetSheet && sheetsList.length > 0) {
+    targetSheet = sheetsList[0];
+  }
+  
+  if (!targetSheet) {
+    throw new Error('No sheets found in the spreadsheet.');
+  }
+
+  const details = {
+    sheetName: targetSheet.properties.title,
+    sheetId: targetSheet.properties.sheetId
+  };
+
+  try {
+    await store.setJSON(`sheet-details-${spreadsheetId}`, details);
+  } catch (err) {
+    console.warn('Error saving sheet details cache:', err.message);
+  }
+  
+  return details;
+}
+
+
 export const HEADER_ALIASES = {
   'Business Name': ['business name', 'business', 'company', 'company name', 'client', 'name'],
   'Website URL': ['website url', 'url', 'website', 'site', 'domain'],
@@ -241,8 +281,11 @@ export function mapRowToObj(rowValues, headersMap) {
   return obj;
 }
 
-export function mapObjToRow(obj, headersMap, maxColumns) {
-  const row = new Array(maxColumns).fill('');
+export function mapObjToRow(obj, headersMap, maxColumns, originalRowValues = []) {
+  const row = [...originalRowValues];
+  while (row.length < maxColumns) {
+    row.push('');
+  }
   // Fill spreadsheet cells
   Object.keys(headersMap).forEach((header) => {
     const index = headersMap[header] - 1;

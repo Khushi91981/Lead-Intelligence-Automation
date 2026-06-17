@@ -14,6 +14,16 @@ import {
   Square
 } from 'lucide-react';
 
+const isEmailSent = (lead) => {
+  const status = String(lead['Sent Status'] || '').toLowerCase();
+  return status.includes('sent') && !status.includes('not');
+};
+
+const isFollowUpSent = (lead) => {
+  const status = String(lead['Follow Up Sent Status'] || '').toLowerCase();
+  return status.includes('sent') && !status.includes('not');
+};
+
 export default function LeadTable({ 
   leads, 
   viewType = 'all', // 'all' or 'sent'
@@ -63,7 +73,7 @@ export default function LeadTable({
     return leads.filter(lead => {
       // 1. Tab-specific filtering
       if (viewType === 'sent') {
-        const isSent = lead['Sent Status'].toLowerCase() === 'sent' || lead['Follow Up Sent Status'].toLowerCase() === 'sent';
+        const isSent = isEmailSent(lead) || isFollowUpSent(lead);
         if (!isSent) return false;
       }
 
@@ -90,7 +100,7 @@ export default function LeadTable({
       // 7. Email Status Filter
       let matchEmailStatus = true;
       if (emailStatusFilter) {
-        const sent = lead['Sent Status'].toLowerCase() === 'sent';
+        const sent = isEmailSent(lead);
         const approved = lead['Approved To Send'] === true;
         const drafted = !!lead['Email Subject'] && !!lead['Email Draft'];
 
@@ -151,7 +161,7 @@ export default function LeadTable({
   };
 
   const getEmailStatusIcon = (lead) => {
-    const isSent = lead['Sent Status'].toLowerCase() === 'sent';
+    const isSent = isEmailSent(lead);
     const isApproved = lead['Approved To Send'] === true;
     const isDrafted = lead['Email Subject'] && lead['Email Draft'];
 
@@ -183,7 +193,7 @@ export default function LeadTable({
   };
 
   const getFollowUpStatusIcon = (lead) => {
-    const isSent = lead['Follow Up Sent Status'].toLowerCase() === 'sent';
+    const isSent = isFollowUpSent(lead);
     const isApproved = lead['Approved To Send Follow Up'] === true;
     const isDrafted = lead['Follow Up Subject'] && lead['Follow Up Draft'];
 
@@ -418,7 +428,7 @@ export default function LeadTable({
                         <button
                           onClick={() => onUpdateCheckbox(lead.rowNumber, 'Approved To Send', !lead['Approved To Send'])}
                           className="focus:outline-none"
-                          disabled={lead['Sent Status'].toLowerCase() === 'sent'}
+                          disabled={isEmailSent(lead)}
                         >
                           {lead['Approved To Send'] ? (
                             <CheckSquare className="text-prasha-gold mx-auto hover:text-prasha-gold/80 transition-colors" size={18} />
@@ -433,7 +443,7 @@ export default function LeadTable({
                         <button
                           onClick={() => onUpdateCheckbox(lead.rowNumber, 'Approved To Send Follow Up', !lead['Approved To Send Follow Up'])}
                           className="focus:outline-none"
-                          disabled={lead['Follow Up Sent Status'].toLowerCase() === 'sent' || lead['Sent Status'].toLowerCase() !== 'sent'}
+                          disabled={isFollowUpSent(lead) || !isEmailSent(lead)}
                         >
                           {lead['Approved To Send Follow Up'] ? (
                             <CheckSquare className="text-prasha-gold mx-auto hover:text-prasha-gold/80 transition-colors" size={18} />
@@ -483,7 +493,7 @@ export default function LeadTable({
                             title="Send Approved Mail"
                             disabled={
                               (!lead['Approved To Send'] && !lead['Approved To Send Follow Up']) ||
-                              (lead['Sent Status'].toLowerCase() === 'sent' && lead['Follow Up Sent Status'].toLowerCase() === 'sent') ||
+                              (isEmailSent(lead) && isFollowUpSent(lead)) ||
                               !lead['Primary Email']
                             }
                             className="p-1.5 bg-slate-800 text-slate-300 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-md border border-slate-700/50 transition-all duration-200 disabled:opacity-30"

@@ -14,7 +14,11 @@ import {
   buildFollowUpEmailDraft,
   buildEmailHtml,
   buildFollowUpEmailHtml,
-  getStorageStore
+  getStorageStore,
+  getHeaderMap,
+  getSheetDetails,
+  isEmailSent,
+  isFollowUpSent
 } from './utils.js';
 import dotenv from 'dotenv';
 
@@ -107,31 +111,38 @@ export const handler = async (event, context) => {
     const oauth2Client = await getGoogleAuthClient();
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
 
-    // Helper to get Sheet Details
-    const metadata = await sheets.spreadsheets.get({ spreadsheetId });
-    const sheetsList = metadata.data.sheets || [];
-    
-    // Find sheet by name 'Leads' or fall back to first sheet
-    let targetSheet = sheetsList.find(s => s.properties.title === CONFIG.sheetName);
-    if (!targetSheet && sheetsList.length > 0) {
-      targetSheet = sheetsList[0];
+    let sheetDetails;
+    try {
+      sheetDetails = await getSheetDetails(sheets, spreadsheetId, store);
+    } catch (err) {
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({ error: `Failed to resolve sheet details: ${err.message}` })
+      };
     }
-    
-    if (!targetSheet) {
-      throw new Error('No sheets found in the spreadsheet.');
-    }
-    
-    const sheetName = targetSheet.properties.title;
-    const sheetId = targetSheet.properties.sheetId;
+    let { sheetName, sheetId } = sheetDetails;
 
     // ==========================================
     // GET: FETCH LEADS
     // ==========================================
     if (event.httpMethod === 'GET') {
-      const response = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${sheetName}!A:Z` // fetch columns A to Z
-      });
+      let response;
+      try {
+        response = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${sheetName}!A:Z` // fetch columns A to Z
+        });
+      } catch (err) {
+        console.warn(`GET leads: failed with sheetName ${sheetName}, retrying with fresh metadata:`, err.message);
+        const fresh = await getSheetDetails(sheets, spreadsheetId, store, true);
+        sheetName = fresh.sheetName;
+        sheetId = fresh.sheetId;
+        response = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${sheetName}!A:Z`
+        });
+      }
 
       const rows = response.data.values || [];
       if (rows.length === 0) {
@@ -143,10 +154,7 @@ export const handler = async (event, context) => {
       }
 
       const rawHeaders = rows[0];
-      const headersMap = {};
-      rawHeaders.forEach((header, index) => {
-        if (header) headersMap[String(header).trim()] = index + 1;
-      });
+      const headersMap = getHeaderMap(rawHeaders);
 
       const leads = rows.slice(1).map((row, i) => {
         const lead = mapRowToObj(row, headersMap);
@@ -172,18 +180,30 @@ export const handler = async (event, context) => {
 
       // 1. SETUP SHEET
       if (action === 'setupSheet') {
-        const response = await sheets.spreadsheets.values.get({
-          spreadsheetId,
-          range: `${sheetName}!A1:Z1`
-        });
+        let response;
+        try {
+          response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${sheetName}!A1:Z1`
+          });
+        } catch (err) {
+          console.warn(`setupSheet: failed to get headers, retrying with fresh metadata: ${err.message}`);
+          const fresh = await getSheetDetails(sheets, spreadsheetId, store, true);
+          sheetName = fresh.sheetName;
+          sheetId = fresh.sheetId;
+          response = await sheets.spreadsheets.values.get({
+            spreadsheetId,
+            range: `${sheetName}!A1:Z1`
+          });
+        }
 
         const existingHeaders = (response.data.values && response.data.values[0]) || [];
-        const existingSet = new Set(existingHeaders.map(h => String(h || '').trim()).filter(Boolean));
-        const missingHeaders = HEADERS.filter(h => !existingSet.has(h));
+        const existingHeadersMap = getHeaderMap(existingHeaders);
+        const missingHeaders = HEADERS.filter(h => existingHeadersMap[h] === undefined);
 
         let currentLastColumn = existingHeaders.length;
         
-        if (existingSet.size === 0) {
+        if (existingHeaders.length === 0) {
           // If empty, write all headers
           await sheets.spreadsheets.values.update({
             spreadsheetId,
@@ -209,11 +229,8 @@ export const handler = async (event, context) => {
           spreadsheetId,
           range: `${sheetName}!1:1`
         });
-        const currentHeaders = headerResponse.data.values[0];
-        const headersMap = {};
-        currentHeaders.forEach((h, i) => {
-          if (h) headersMap[String(h).trim()] = i + 1;
-        });
+        const currentHeaders = headerResponse.data.values[0] || [];
+        const headersMap = getHeaderMap(currentHeaders);
 
         const approvedCol = headersMap['Approved To Send'];
         const approvedFollowUpCol = headersMap['Approved To Send Follow Up'];
@@ -300,15 +317,24 @@ export const handler = async (event, context) => {
       }
 
       // Helper to fetch current header maps for following actions
-      const headerResponse = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: `${sheetName}!1:1`
-      });
-      const currentHeaders = headerResponse.data.values[0];
-      const headersMap = {};
-      currentHeaders.forEach((h, i) => {
-        if (h) headersMap[String(h).trim()] = i + 1;
-      });
+      let headerResponse;
+      try {
+        headerResponse = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${sheetName}!1:1`
+        });
+      } catch (err) {
+        console.warn(`POST actions: failed to get headers, retrying with fresh metadata: ${err.message}`);
+        const fresh = await getSheetDetails(sheets, spreadsheetId, store, true);
+        sheetName = fresh.sheetName;
+        sheetId = fresh.sheetId;
+        headerResponse = await sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: `${sheetName}!1:1`
+        });
+      }
+      const currentHeaders = headerResponse.data.values[0] || [];
+      const headersMap = getHeaderMap(currentHeaders);
 
       // 2. UPDATE CELL VALUES (e.g. checkbox toggles or inline edits)
       if (action === 'updateCells') {
@@ -350,13 +376,25 @@ export const handler = async (event, context) => {
           range: `${sheetName}!A:Z`
         });
         const allRows = response.data.values || [];
+        if (allRows.length === 0) {
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+            body: JSON.stringify({ success: true, results: [] })
+          };
+        }
+
+        // Use headers from row 0 directly to avoid an extra API call
+        const actionHeadersMap = getHeaderMap(allRows[0]);
 
         for (const rowNum of rowsToProcess) {
           const rowValues = allRows[rowNum - 1] || [];
-          const lead = mapRowToObj(rowValues, headersMap);
+          const lead = mapRowToObj(rowValues, actionHeadersMap);
           const website = lead['Website URL'];
 
-          if (!website) {
+          // Skip if no website or if email has already been sent/processed
+          if (!website || isEmailSent(lead) || isFollowUpSent(lead)) {
+            results.push({ rowNumber: rowNum, status: 'skipped', reason: 'Missing website or email already sent.' });
             continue;
           }
 
@@ -389,9 +427,9 @@ export const handler = async (event, context) => {
             results.push({ rowNumber: rowNum, status: 'error', error: err.message });
           }
 
-          // Convert back to row array
+          // Convert back to row array, preserving other columns
           const maxCols = Math.max(allRows[0].length, HEADERS.length);
-          const updatedRow = mapObjToRow(lead, headersMap, maxCols);
+          const updatedRow = mapObjToRow(lead, actionHeadersMap, maxCols, rowValues);
 
           // Write updates back
           updates.push({
@@ -427,23 +465,40 @@ export const handler = async (event, context) => {
           range: `${sheetName}!A:Z`
         });
         const allRows = response.data.values || [];
+        if (allRows.length === 0) {
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+            body: JSON.stringify({ success: true })
+          };
+        }
+
+        const actionHeadersMap = getHeaderMap(allRows[0]);
 
         for (const rowNum of rowsToProcess) {
           const rowValues = allRows[rowNum - 1] || [];
-          const lead = mapRowToObj(rowValues, headersMap);
+          const lead = mapRowToObj(rowValues, actionHeadersMap);
 
           if (draftType === 'first') {
+            // Lock first email drafting if it is already sent
+            if (isEmailSent(lead)) {
+              continue;
+            }
             const draft = buildEmailDraft(lead);
             lead['Email Subject'] = draft.subject;
             lead['Email Draft'] = draft.body;
           } else {
+            // Lock follow-up drafting if follow-up already sent or first email NOT sent yet
+            if (isFollowUpSent(lead) || !isEmailSent(lead)) {
+              continue;
+            }
             const draft = buildFollowUpEmailDraft(lead);
             lead['Follow Up Subject'] = draft.subject;
             lead['Follow Up Draft'] = draft.body;
           }
 
           const maxCols = Math.max(allRows[0].length, HEADERS.length);
-          const updatedRow = mapObjToRow(lead, headersMap, maxCols);
+          const updatedRow = mapObjToRow(lead, actionHeadersMap, maxCols, rowValues);
 
           updates.push({
             range: `${sheetName}!A${rowNum}:${getColumnLetter(maxCols)}${rowNum}`,
@@ -478,6 +533,15 @@ export const handler = async (event, context) => {
           range: `${sheetName}!A:Z`
         });
         const allRows = response.data.values || [];
+        if (allRows.length === 0) {
+          return {
+            statusCode: 200,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+            body: JSON.stringify({ success: true, results: [] })
+          };
+        }
+
+        const actionHeadersMap = getHeaderMap(allRows[0]);
         const results = [];
         const updates = [];
 
@@ -486,15 +550,15 @@ export const handler = async (event, context) => {
 
         for (const rowNum of rowsToProcess) {
           const rowValues = allRows[rowNum - 1] || [];
-          const lead = mapRowToObj(rowValues, headersMap);
+          const lead = mapRowToObj(rowValues, actionHeadersMap);
 
           const toEmail = lead['Primary Email'];
           
           // Verify what type of email we are sending (First vs Follow-up)
           const approvedFirst = lead['Approved To Send'] === true;
-          const sentFirst = lead['Sent Status'].toLowerCase() === 'sent';
+          const sentFirst = isEmailSent(lead);
           const approvedFollowUp = lead['Approved To Send Follow Up'] === true;
-          const sentFollowUp = lead['Follow Up Sent Status'].toLowerCase() === 'sent';
+          const sentFollowUp = isFollowUpSent(lead);
 
           let mailType = '';
           let subject = '';
@@ -534,12 +598,12 @@ export const handler = async (event, context) => {
               requestBody: { raw: rawMessage }
             });
 
-            // Update statuses
+            // Update statuses to match dropdown option 'Email Sent'
             if (mailType === 'first') {
-              lead['Sent Status'] = 'Sent';
+              lead['Sent Status'] = 'Email Sent';
               lead['Sent At'] = new Date().toISOString();
             } else {
-              lead['Follow Up Sent Status'] = 'Sent';
+              lead['Follow Up Sent Status'] = 'Email Sent';
               lead['Follow Up Sent At'] = new Date().toISOString();
             }
 
@@ -551,7 +615,7 @@ export const handler = async (event, context) => {
           }
 
           const maxCols = Math.max(allRows[0].length, HEADERS.length);
-          const updatedRow = mapObjToRow(lead, headersMap, maxCols);
+          const updatedRow = mapObjToRow(lead, actionHeadersMap, maxCols, rowValues);
 
           updates.push({
             range: `${sheetName}!A${rowNum}:${getColumnLetter(maxCols)}${rowNum}`,
