@@ -1,0 +1,31 @@
+# Node modules
+node_modules/
+
+# Local Netlify folder
+.netlify/
+
+# Local environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Local file stores
+.local-store-*
+*.json.local
+
+# Build outputs
+dist/
+dist-ssr/
+*.local
+
+# Editor directories and files
+.vscode/
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
